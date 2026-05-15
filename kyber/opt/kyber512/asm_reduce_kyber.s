@@ -1,501 +1,258 @@
 #include <avr/io.h>
 
-.macro montmul_str ptr_lo, ptr_hi, f_lo, f_hi, qinv_lo, qinv_hi, kyberq_lo, kyberq_hi, res_lo_r, res_hi_r, tmp0, tmp1, tmp2, tmp3
+.def KYBER_Q_L = r4
+.def KYBER_Q_H = r5
+.def QINV_L = r6
+.def QINV_H = r7
+.def f_L = r8
+.def f_H = r9
+.def v_L = r10
+.def v_H = r11
+.def res_lo_L = r12
+.def res_lo_H = r13
+.def res_hi_L = r14
+.def res_hi_H = r15
+.def zero = r16
+.def word_L = r17
+.def word_H = r18
+.def ptrL = r30
+.def ptrH = r31
+.def forstopL = r28
+.def forstopH = r29
 
-    ld      tmp0, \ptr_lo:\ptr_hi
-    ldd     tmp1, \ptr_lo:\ptr_hi+1
-
-    muls    tmp1, \f_hi
-    movw    tmp2, r0
-
-    mul     tmp0, \f_lo
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    mulsu   tmp1, \f_lo
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    mulsu   \f_hi, tmp0
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    movw    \res_lo_r, tmp2
-
-    movw    tmp2, \res_lo_r
-
-    muls    tmp3, \qinv_hi
-    movw    \res_hi_r, r0
-
-    mul     tmp2, \qinv_lo
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    mulsu   tmp3, \qinv_lo
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    mulsu   \qinv_hi, tmp2
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    movw    tmp2, \res_hi_r
-
-    muls    tmp3, \kyberq_hi
-    movw    \res_hi_r, r0
-
-    mul     tmp2, \kyberq_lo
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    mulsu   tmp3, \kyberq_lo
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    mulsu   \kyberq_hi, tmp2
-    add     \res_hi_r, r0
-    adc     \res_hi_r+1, r1
-
-    sub     \res_lo_r, \res_hi_r
-    sbc     \res_lo_r+1, \res_hi_r+1
-
-    st      \ptr_lo:\ptr_hi, \res_lo_r
-    std     \ptr_lo:\ptr_hi+1, \res_lo_r+1
-
-    adiw    \ptr_lo:\ptr_hi, 2
-
+.macro montmul_str
+    ld r0, Z+
+    ld r1, Z-
+    movw r2, r0
+    movw r0, r2
+    movw r20, f_L
+    call mul16_32
+    movw res_hi_L, r22
+    movw res_lo_L, r20
+    movw r0, res_lo_L
+    movw r20, QINV_L
+    call mul16_32
+    movw r0, r20
+    movw r20, KYBER_Q_L
+    call mul16_32
+    sub res_hi_L, r22
+    sbc res_hi_H, r23
+    st Z, res_hi_L
+    std Z+1, res_hi_H
+    adiw Z, 2
 .endm
 
-
-.macro barrett_str ptr_lo, ptr_hi, v_lo, v_hi, kyberq_lo, kyberq_hi, word_lo, word_hi, tmp0, tmp1, tmp2, tmp3, tmp4, tmp5
-
-    ld      tmp0, \ptr_lo:\ptr_hi
-    ldd     tmp1, \ptr_lo:\ptr_hi+1
-
-    muls    tmp1, \v_hi
-    movw    tmp2, r0
-
-    mul     tmp0, \v_lo
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    mulsu   tmp1, \v_lo
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    mulsu   \v_hi, tmp0
-    add     tmp2, r0
-    adc     tmp3, r1
-
-    add     tmp3, \word_lo
-    adc     tmp4, \word_hi
-
-    mov     tmp5, tmp4
-
-    lsl     tmp3
-    rol     tmp4
-    lsl     tmp3
-    rol     tmp4
-
-    mov     tmp3, tmp4
-    ldi     tmp4, 0
-    sbrc    tmp3, 7
-    dec     tmp4
-
-    muls    tmp3, \kyberq_hi
-    movw    tmp4, r0
-
-    mul     tmp2, \kyberq_lo
-    add     tmp4, r0
-    adc     tmp5, r1
-
-    mulsu   tmp3, \kyberq_lo
-    add     tmp4, r0
-    adc     tmp5, r1
-
-    mulsu   \kyberq_hi, tmp2
-    add     tmp4, r0
-    adc     tmp5, r1
-
-    ld      tmp2, \ptr_lo:\ptr_hi
-    ldd     tmp3, \ptr_lo:\ptr_hi+1
-
-    sub     tmp2, tmp4
-    sbc     tmp3, tmp5
-
-    st      \ptr_lo:\ptr_hi, tmp2
-    std     \ptr_lo:\ptr_hi+1, tmp3
-
-    adiw    \ptr_lo:\ptr_hi, 2
-
+.macro origin_barrett
+    ld r0, Z+
+    ld r1, Z-
+    movw r20, v_L
+    call mul16_32
+    movw r2, r22
+    add r2, word_L
+    adc r3, word_H
+    swap r2
+    swap r3
+    mov r4, r2
+    andi r4, 0x0f
+    mov r5, r3
+    andi r5, 0x0f
+    mov r6, r2
+    swap r6
+    andi r6, 0xf0
+    or r4, r6
+    mov r6, r3
+    swap r6
+    andi r6, 0xf0
+    or r5, r6
+    sbrc r5, 7
+    com r4
+    asr r5
+    ror r4
+    asr r5
+    ror r4
+    movw r20, r4
+    movw r0, r20
+    movw r20, KYBER_Q_L
+    call mul16_32
+    ld r0, Z
+    ld r1, Z+
+    sub r0, r20
+    sbc r1, r21
+    st -Z, r0
+    std Z+1, r1
+    adiw Z, 2
 .endm
 
-
-.section .text
+mul16_32:
+    clr r24
+    clr r25
+    clr r26
+    clr r27
+    mov r18, r0
+    mov r19, r1
+    mov r20, r2
+    mov r21, r3
+    mul r18, r20
+    movw r22, r0
+    mul r18, r21
+    add r23, r0
+    adc r24, r1
+    clr r25
+    mul r19, r20
+    add r23, r0
+    adc r24, r1
+    adc r25, r2
+    mul r19, r21
+    add r24, r0
+    adc r25, r1
+    clr r26
+    adc r26, r2
+    movw r20, r22
+    movw r22, r24
+    ret
 
 .global asm_poly_tomont
 asm_poly_tomont:
-
-    push    r2
-    push    r3
-    push    r4
-    push    r5
-    push    r6
-    push    r7
-    push    r8
-    push    r9
-    push    r10
-    push    r11
-    push    r12
-    push    r13
-    push    r14
-    push    r15
-    push    r16
-    push    r17
-    push    r28
-    push    r29
-
-    movw    r26, r24
-
-    ldi     r18, lo8(1353)
-    ldi     r19, hi8(1353)
-
-    ldi     r20, lo8(3329)
-    ldi     r21, hi8(3329)
-
-    ldi     r22, lo8(-3327)
-    ldi     r23, hi8(-3327)
-
-    movw    r30, r26
-    adiw    r30, lo8(512)
-    movw    r28, r30
-
+    push r4
+    push r5
+    push r6
+    push r7
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    push r28
+    push r29
+    push r30
+    push r31
+    ldi f_L, 0x49
+    ldi f_H, 0x05
+    ldi KYBER_Q_L, 0x01
+    ldi KYBER_Q_H, 0x0d
+    ldi QINV_L, 0x01
+    ldi QINV_H, 0xf3
+    movw forstopL, ptrL
+    adiw forstopL, 512
 loop_mont:
-
-    ld      r2, X
-    ldd     r3, X+1
-
-    muls    r3, r19
-    movw    r4, r0
-
-    mul     r2, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r3, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r19, r2
-    add     r4, r0
-    adc     r5, r1
-
-    movw    r6, r4
-
-    muls    r5, r23
-    movw    r8, r0
-
-    mul     r6, r22
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r5, r22
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r23, r6
-    add     r8, r0
-    adc     r9, r1
-
-    movw    r10, r8
-
-    muls    r9, r21
-    movw    r12, r0
-
-    mul     r10, r20
-    add     r12, r0
-    adc     r13, r1
-
-    mulsu   r9, r20
-    add     r12, r0
-    adc     r13, r1
-
-    mulsu   r21, r10
-    add     r12, r0
-    adc     r13, r1
-
-    sub     r4, r12
-    sbc     r5, r13
-
-    st      X, r4
-    std     X+1, r5
-
-    adiw    r26, 2
-
-    cp      r26, r28
-    cpc     r27, r29
-    brlo    loop_mont
-
-    pop     r29
-    pop     r28
-    pop     r17
-    pop     r16
-    pop     r15
-    pop     r14
-    pop     r13
-    pop     r12
-    pop     r11
-    pop     r10
-    pop     r9
-    pop     r8
-    pop     r7
-    pop     r6
-    pop     r5
-    pop     r4
-    pop     r3
-    pop     r2
-
+    montmul_str
+    cp ptrL, forstopL
+    cpc ptrH, forstopH
+    brne loop_mont
+    pop r31
+    pop r30
+    pop r29
+    pop r28
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop r7
+    pop r6
+    pop r5
+    pop r4
     ret
-
 
 .global asm_poly_barrett
 asm_poly_barrett:
-
-    push    r2
-    push    r3
-    push    r4
-    push    r5
-    push    r6
-    push    r7
-    push    r8
-    push    r9
-    push    r10
-    push    r11
-    push    r12
-    push    r13
-    push    r14
-    push    r15
-    push    r16
-    push    r17
-    push    r28
-    push    r29
-
-    movw    r26, r24
-
-    ldi     r18, lo8(0x4ebf)
-    ldi     r19, hi8(0x4ebf)
-
-    ldi     r20, lo8(3329)
-    ldi     r21, hi8(3329)
-
-    ldi     r22, lo8(0x200)
-    ldi     r23, hi8(0x200)
-
-    movw    r30, r26
-    adiw    r30, lo8(512)
-    movw    r28, r30
-
+    push r4
+    push r5
+    push r6
+    push r7
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    push r28
+    push r29
+    push r30
+    push r31
+    ldi v_L, 0xbf
+    ldi v_H, 0x4e
+    ldi KYBER_Q_L, 0x01
+    ldi KYBER_Q_H, 0x0d
+    ldi word_L, 0x00
+    ldi word_H, 0x02
+    clr zero
+    movw forstopL, ptrL
+    adiw forstopL, 512
 loop_barrett:
-
-    ld      r2, X
-    ldd     r3, X+1
-
-    muls    r3, r19
-    movw    r4, r0
-
-    mul     r2, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r3, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r19, r2
-    add     r4, r0
-    adc     r5, r1
-
-    add     r5, r22
-    adc     r6, r23
-
-    mov     r7, r6
-
-    lsl     r5
-    rol     r6
-    lsl     r5
-    rol     r6
-
-    mov     r5, r6
-    ldi     r6, 0
-    sbrc    r5, 7
-    dec     r6
-
-    muls    r5, r21
-    movw    r8, r0
-
-    mul     r4, r20
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r5, r20
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r21, r4
-    add     r8, r0
-    adc     r9, r1
-
-    ld      r10, X
-    ldd     r11, X+1
-
-    sub     r10, r8
-    sbc     r11, r9
-
-    st      X, r10
-    std     X+1, r11
-
-    adiw    r26, 2
-
-    cp      r26, r28
-    cpc     r27, r29
-    brlo    loop_barrett
-
-    pop     r29
-    pop     r28
-    pop     r17
-    pop     r16
-    pop     r15
-    pop     r14
-    pop     r13
-    pop     r12
-    pop     r11
-    pop     r10
-    pop     r9
-    pop     r8
-    pop     r7
-    pop     r6
-    pop     r5
-    pop     r4
-    pop     r3
-    pop     r2
-
+    origin_barrett
+    cp ptrL, forstopL
+    cpc ptrH, forstopH
+    brne loop_barrett
+    pop r31
+    pop r30
+    pop r29
+    pop r28
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop r7
+    pop r6
+    pop r5
+    pop r4
     ret
-
 
 .global asm_NTT_poly_barrett
 asm_NTT_poly_barrett:
-
-    push    r2
-    push    r3
-    push    r4
-    push    r5
-    push    r6
-    push    r7
-    push    r8
-    push    r9
-    push    r10
-    push    r11
-    push    r12
-    push    r13
-    push    r14
-    push    r15
-    push    r16
-    push    r17
-    push    r28
-    push    r29
-
-    movw    r26, r24
-
-    ldi     r18, lo8(20)
-    ldi     r19, hi8(20)
-
-    ldi     r20, lo8(3329)
-    ldi     r21, hi8(3329)
-
-    movw    r30, r26
-    adiw    r30, lo8(512)
-    movw    r28, r30
-
+    push r4
+    push r5
+    push r6
+    push r7
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    push r28
+    push r29
+    push r30
+    push r31
+    ldi v_L, 0x14
+    ldi v_H, 0x00
+    ldi KYBER_Q_L, 0x01
+    ldi KYBER_Q_H, 0x0d
+    movw forstopL, ptrL
+    adiw forstopL, 512
 loop_barrett_NTT:
-
-    ld      r2, X
-    ldd     r3, X+1
-
-    muls    r3, r19
-    movw    r4, r0
-
-    mul     r2, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r3, r18
-    add     r4, r0
-    adc     r5, r1
-
-    mulsu   r19, r2
-    add     r4, r0
-    adc     r5, r1
-
-    mov     r6, r5
-
-    lsl     r5
-    rol     r6
-
-    lsl     r5
-    rol     r6
-
-    mov     r5, r6
-    ldi     r6, 0
-    sbrc    r5, 7
-    dec     r6
-
-    muls    r5, r21
-    movw    r8, r0
-
-    mul     r4, r20
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r5, r20
-    add     r8, r0
-    adc     r9, r1
-
-    mulsu   r21, r4
-    add     r8, r0
-    adc     r9, r1
-
-    ld      r10, X
-    ldd     r11, X+1
-
-    sub     r10, r8
-    sbc     r11, r9
-
-    st      X, r10
-    std     X+1, r11
-
-    adiw    r26, 2
-
-    cp      r26, r28
-    cpc     r27, r29
-    brlo    loop_barrett_NTT
-
-    pop     r29
-    pop     r28
-    pop     r17
-    pop     r16
-    pop     r15
-    pop     r14
-    pop     r13
-    pop     r12
-    pop     r11
-    pop     r10
-    pop     r9
-    pop     r8
-    pop     r7
-    pop     r6
-    pop     r5
-    pop     r4
-    pop     r3
-    pop     r2
-
+    origin_barrett
+    cp ptrL, forstopL
+    cpc ptrH, forstopH
+    brne loop_barrett_NTT
+    pop r31
+    pop r30
+    pop r29
+    pop r28
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop r7
+    pop r6
+    pop r5
+    pop r4
     ret
