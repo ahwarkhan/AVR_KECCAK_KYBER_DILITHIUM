@@ -1,306 +1,469 @@
 #include <avr/io.h>
 
-.def KYBER_Q_L = r16
-.def KYBER_Q_H = r17
-.def QINV_L = r18
-.def QINV_H = r19
-.def ptrL = r30
-.def ptrH = r31
-.def forstopL = r28
-.def forstopH = r29
-.def mul_res_hiL = r14
-.def mul_res_hiH = r15
+#define         KYBER_Q         r10
+#define         QINV            r11
 
-.macro mul16_32 aL, aH, bL, bH, resL, resM, resN, resO
-    clr r0
-    clr r1
-    mul \aL, \bL
-    movw \resL, r0
-    mul \aH, \bL
-    add \resM, r0
-    adc \resN, r1
-    clr r0
-    adc \resO, r0
-    mul \aL, \bH
-    add \resM, r0
-    adc \resN, r1
-    adc \resO, r0
-    mul \aH, \bH
-    add \resN, r0
-    adc \resO, r1
+#define         mul_res_hi      r14
+
+#define         ptrL            r30
+#define         ptrH            r31
+
+#define         forstopL        r20
+#define         forstopH        r21
+
+.macro load16 dst_lo, dst_hi, base_lo, base_hi, byte_offset
+        ldi     r24, lo8(\byte_offset)
+        ldi     r25, hi8(\byte_offset)
+        movw    r26, r30
+        add     r26, r24
+        adc     r27, r25
+        ld      \dst_lo, X+
+        ld      \dst_hi, X
 .endm
 
-.macro mont_reduce prodL, prodM, prodN, prodO, outL, outH
-    movw r20, \prodL
-    movw r22, \prodN
-    mul16_32 r20, r21, QINV_L, QINV_H, r0, r1, r2, r3
-    movw r20, r0
-    mul16_32 r20, r21, KYBER_Q_L, KYBER_Q_H, r0, r1, r2, r3
-    sub \prodN, r2
-    sbc \prodO, r3
-    movw \outL, \prodN
+.macro store16 src_lo, src_hi, base_lo, base_hi, byte_offset
+        ldi     r24, lo8(\byte_offset)
+        ldi     r25, hi8(\byte_offset)
+        movw    r26, r30
+        add     r26, r24
+        adc     r27, r25
+        st      X+, \src_lo
+        st      X, \src_hi
 .endm
 
-.macro butterfly src1L, src1H, src2L, src2H, zetaL, zetaH, use_imd
-    mul16_32 \zetaL, \zetaH, \src2L, \src2H, r20, r21, r22, r23
-    .if \use_imd == 0
-        mont_reduce r20, r21, r22, r23, mul_res_hiL, mul_res_hiH
-    .else
-        movw r20, r20
-        ldi r18, 0x01
-        ldi r19, 0xF3
-        ldi r16, 0x01
-        ldi r17, 0x0D
-        mont_reduce r20, r21, r22, r23, mul_res_hiL, mul_res_hiH
-        ldi r16, 0x01
-        ldi r17, 0x0D
-        ldi r18, 0x01
-        ldi r19, 0xF3
-    .endif
-    movw \src1L, \src2L
-    add \src1L, mul_res_hiL
-    adc \src1H, mul_res_hiH
-    sub \src2L, mul_res_hiL
-    sbc \src2H, mul_res_hiH
+.macro muls16x16_hi prod_hi_lo, prod_hi_hi, aL, aH, bL, bH
+        mul     \aL, \bL
+        movw    r22, r0
+        mulsu   \aH, \bL
+        sbc     r25, r25
+        add     r23, r0
+        adc     r24, r1
+        adc     r25, r25
+        mulsu   \bH, \aL
+        sbc     r17, r17
+        add     r23, r0
+        adc     r24, r1
+        adc     r25, r17
+        muls    \aH, \bH
+        add     r24, r0
+        adc     r25, r1
+        movw    \prod_hi_lo, r24
 .endm
 
-.macro first_butterfly src1L, src1H, src2L, src2H, zetaL, zetaH, off, use_imd
-    ldd r20, Z+\off
-    ldd r21, Z+\off+1
-    .if \use_imd == 0
-        butterfly \src1L, \src1H, r20, r21, \zetaL, \zetaH, 0
-    .else
-        butterfly \src1L, \src1H, r20, r21, \zetaL, \zetaH, 1
-    .endif
-    movw \src2L, r20
-    movw \src2H, r21
+.macro mont mul_low_lo, mul_low_hi, mul_hi_lo, mul_hi_hi
+
+        muls16x16_hi    r22, r23, \mul_low_lo, \mul_low_hi, r11, r12
+
+        muls16x16_hi    r22, r23, r22, r23, KYBER_Q, r13
+
+        sub     \mul_hi_lo, r22
+        sbc     \mul_hi_hi, r23
+
 .endm
 
-.macro merging_2 zeta1L, zeta1H, zeta2L, zeta2H, zeta3L, zeta3H, off1, off2, off3, off4
-    ldd r4, Z+\off1
-    ldd r5, Z+\off1+1
-    ldd r6, Z+\off2
-    ldd r7, Z+\off2+1
-    first_butterfly r4, r5, r8, r9, \zeta1L, \zeta1H, \off3, 0
-    first_butterfly r6, r7, r10, r11, \zeta1L, \zeta1H, \off4, 0
-    butterfly r4, r5, r6, r7, \zeta2L, \zeta2H, 0
-    butterfly r8, r9, r10, r11, \zeta3L, \zeta3H, 0
-    std Z+\off1, r4
-    std Z+\off1+1, r5
-    std Z+\off2, r6
-    std Z+\off2+1, r7
-    std Z+\off3, r8
-    std Z+\off3+1, r9
-    std Z+\off4, r10
-    std Z+\off4+1, r11
-    adiw Z, 2
+.macro mont_imd mul_low_lo, mul_low_hi, mul_hi_lo, mul_hi_hi
+
+        ldi     r24, lo8(-3327)
+        ldi     r25, hi8(-3327)
+        muls16x16_hi    r22, r23, \mul_low_lo, \mul_low_hi, r24, r25
+
+        ldi     r24, lo8(3329)
+        ldi     r25, hi8(3329)
+        muls16x16_hi    r22, r23, r22, r23, r24, r25
+
+        sub     \mul_hi_lo, r22
+        sbc     \mul_hi_hi, r23
+
 .endm
 
-.macro merging_3 z1L, z1H, z2L, z2H, z3L, z3H, z4L, z4H, z5L, z5H, z6L, z6H, z7L, z7H
-    ldd r4, Z+0
-    ldd r5, Z+1
-    ldd r6, Z+4
-    ldd r7, Z+5
-    ldd r8, Z+8
-    ldd r9, Z+9
-    ldd r10, Z+12
-    ldd r11, Z+13
-    first_butterfly r4, r5, r12, r13, \z1L, \z1H, 16, 1
-    first_butterfly r6, r7, r14, r15, \z1L, \z1H, 20, 1
-    first_butterfly r8, r9, r16, r17, \z1L, \z1H, 24, 1
-    first_butterfly r10, r11, r18, r19, \z1L, \z1H, 28, 1
-    butterfly r4, r5, r8, r9, \z2L, \z2H, 1
-    butterfly r6, r7, r10, r11, \z2L, \z2H, 1
-    butterfly r12, r13, r16, r17, \z3L, \z3H, 1
-    butterfly r14, r15, r18, r19, \z3L, \z3H, 1
-    butterfly r4, r5, r6, r7, \z4L, \z4H, 1
-    butterfly r8, r9, r10, r11, \z5L, \z5H, 1
-    butterfly r12, r13, r14, r15, \z6L, \z6H, 1
-    butterfly r16, r17, r18, r19, \z7L, \z7H, 1
-    std Z+0, r4
-    std Z+1, r5
-    std Z+4, r6
-    std Z+5, r7
-    std Z+8, r8
-    std Z+9, r9
-    std Z+12, r10
-    std Z+13, r11
-    std Z+16, r12
-    std Z+17, r13
-    std Z+20, r14
-    std Z+21, r15
-    std Z+24, r16
-    std Z+25, r17
-    std Z+28, r18
-    std Z+29, r19
-    adiw Z, 2
+.macro first_butter_fly src1_lo, src1_hi, src2_lo, src2_hi, zeta_lo, zeta_hi, byte_off
+
+        load16  r6, r7, r30, r31, \byte_off
+
+        muls16x16_hi    r14, r15, \zeta_lo, \zeta_hi, r6, r7
+
+        muls16x16_hi    r22, r23, r14, r15, QINV, r13
+
+        muls16x16_hi    r22, r23, r22, r23, KYBER_Q, r13
+
+        sub     r14, r22
+        sbc     r15, r23
+
+        movw    \src2_lo, \src1_lo
+        add     \src1_lo, r14
+        adc     \src1_hi, r15
+        sub     \src2_lo, r14
+        sbc     \src2_hi, r15
+
 .endm
+
+.macro butter_fly src1_lo, src1_hi, src2_lo, src2_hi, zeta_lo, zeta_hi
+
+        muls16x16_hi    r14, r15, \zeta_lo, \zeta_hi, \src2_lo, \src2_hi
+
+        muls16x16_hi    r22, r23, r14, r15, QINV, r13
+
+        muls16x16_hi    r22, r23, r22, r23, KYBER_Q, r13
+
+        sub     r14, r22
+        sbc     r15, r23
+
+        movw    \src2_lo, \src1_lo
+        add     \src1_lo, r14
+        adc     \src1_hi, r15
+        sub     \src2_lo, r14
+        sbc     \src2_hi, r15
+
+.endm
+
+.macro first_butter_fly_imd src1_lo, src1_hi, src2_lo, src2_hi, zeta_lo, zeta_hi, byte_off
+
+        load16  r6, r7, r30, r31, \byte_off
+
+        muls16x16_hi    r14, r15, \zeta_lo, \zeta_hi, r6, r7
+
+        ldi     r24, lo8(-3327)
+        ldi     r25, hi8(-3327)
+        muls16x16_hi    r22, r23, r14, r15, r24, r25
+
+        ldi     r24, lo8(3329)
+        ldi     r25, hi8(3329)
+        muls16x16_hi    r22, r23, r22, r23, r24, r25
+
+        sub     r14, r22
+        sbc     r15, r23
+
+        movw    \src2_lo, \src1_lo
+        add     \src1_lo, r14
+        adc     \src1_hi, r15
+        sub     \src2_lo, r14
+        sbc     \src2_hi, r15
+
+.endm
+
+.macro butter_fly_imd src1_lo, src1_hi, src2_lo, src2_hi, zeta_lo, zeta_hi
+
+        muls16x16_hi    r14, r15, \zeta_lo, \zeta_hi, \src2_lo, \src2_hi
+
+        ldi     r24, lo8(-3327)
+        ldi     r25, hi8(-3327)
+        muls16x16_hi    r22, r23, r14, r15, r24, r25
+
+        ldi     r24, lo8(3329)
+        ldi     r25, hi8(3329)
+        muls16x16_hi    r22, r23, r22, r23, r24, r25
+
+        sub     r14, r22
+        sbc     r15, r23
+
+        movw    \src2_lo, \src1_lo
+        add     \src1_lo, r14
+        adc     \src1_hi, r15
+        sub     \src2_lo, r14
+        sbc     \src2_hi, r15
+
+.endm
+
+.macro merging_2 zeta1_lo, zeta1_hi, zeta2_lo, zeta2_hi, zeta3_lo, zeta3_hi, byte_off1, byte_off2, byte_off3, byte_off4
+
+        load16  r4, r5, r30, r31, \byte_off1
+        load16  r6, r7, r30, r31, \byte_off2
+
+        first_butter_fly    r4, r5, r8, r9, \zeta1_lo, \zeta1_hi, \byte_off3
+        first_butter_fly    r6, r7, r9, r10, \zeta1_lo, \zeta1_hi, \byte_off4
+
+        butter_fly          r4, r5, r6, r7, \zeta2_lo, \zeta2_hi
+        butter_fly          r8, r9, r9, r10, \zeta3_lo, \zeta3_hi
+
+        store16 r4, r5, r30, r31, \byte_off1
+        store16 r6, r7, r30, r31, \byte_off2
+        store16 r8, r9, r30, r31, \byte_off3
+        store16 r9, r10, r30, r31, \byte_off4
+
+        adiw    r30, 2
+
+.endm
+
+.macro merging_3 zeta1_lo, zeta1_hi, zeta2_lo, zeta2_hi, zeta3_lo, zeta3_hi, zeta4_lo, zeta4_hi, zeta5_lo, zeta5_hi, zeta6_lo, zeta6_hi, zeta7_lo, zeta7_hi
+
+        load16  r4, r5, r30, r31, 0
+        load16  r6, r7, r30, r31, 8
+        load16  r8, r9, r30, r31, 16
+        load16  r10, r11, r30, r31, 24
+
+        first_butter_fly_imd    r4, r5, r12, r13, \zeta1_lo, \zeta1_hi, 32
+        first_butter_fly_imd    r6, r7, r14, r15, \zeta1_lo, \zeta1_hi, 40
+        first_butter_fly_imd    r8, r9, r16, r17, \zeta1_lo, \zeta1_hi, 48
+        first_butter_fly_imd    r10, r11, r18, r19, \zeta1_lo, \zeta1_hi, 56
+
+        butter_fly_imd          r4, r5, r8, r9, \zeta2_lo, \zeta2_hi
+        butter_fly_imd          r6, r7, r10, r11, \zeta2_lo, \zeta2_hi
+        butter_fly_imd          r12, r13, r16, r17, \zeta3_lo, \zeta3_hi
+        butter_fly_imd          r14, r15, r18, r19, \zeta3_lo, \zeta3_hi
+
+        butter_fly_imd          r4, r5, r6, r7, \zeta4_lo, \zeta4_hi
+        butter_fly_imd          r8, r9, r10, r11, \zeta5_lo, \zeta5_hi
+        butter_fly_imd          r12, r13, r14, r15, \zeta6_lo, \zeta6_hi
+        butter_fly_imd          r16, r17, r18, r19, \zeta7_lo, \zeta7_hi
+
+        store16 r4, r5, r30, r31, 0
+        store16 r6, r7, r30, r31, 8
+        store16 r8, r9, r30, r31, 16
+        store16 r10, r11, r30, r31, 24
+        store16 r12, r13, r30, r31, 32
+        store16 r14, r15, r30, r31, 40
+        store16 r16, r17, r30, r31, 48
+        store16 r18, r19, r30, r31, 56
+
+        adiw    r30, 2
+
+.endm
+
+.section .text
 
 .global asm_ntt_merging
 asm_ntt_merging:
-    push r2
-    push r3
-    push r4
-    push r5
-    push r6
-    push r7
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    push r16
-    push r17
-    push r18
-    push r19
-    push r28
-    push r29
-    push r30
-    push r31
-    movw forstopL, ptrL
-    adiw forstopL, 128
-    ldi KYBER_Q_L, 0x01
-    ldi KYBER_Q_H, 0x0D
-    ldi QINV_L, 0x01
-    ldi QINV_H, 0xF3
-    ldi r8, 0x0A
-    ldi r9, 0xFD
-    ldi r10, 0x99
-    ldi r11, 0xFE
-    ldi r13, 0x1D
-    ldi r12, 0xFA
+
+        push    r4
+        push    r5
+        push    r6
+        push    r7
+        push    r8
+        push    r9
+        push    r10
+        push    r11
+        push    r12
+        push    r13
+        push    r14
+        push    r15
+        push    r16
+        push    r17
+        push    r18
+        push    r19
+        push    r20
+        push    r21
+        push    r28
+        push    r29
+
+        movw    r30, r24
+
+        movw    r20, r30
+        ldi     r24, lo8(128)
+        ldi     r25, hi8(128)
+        add     r20, r24
+        adc     r21, r25
+
+        ldi     r24, lo8(3329)
+        ldi     r25, hi8(3329)
+        movw    KYBER_Q, r24
+
+        ldi     r24, lo8(-3327)
+        ldi     r25, hi8(-3327)
+        movw    QINV, r24
+
+        ldi     r8, lo8(-758)
+        ldi     r9, hi8(-758)
+        ldi     r24, lo8(-359)
+        ldi     r25, hi8(-359)
+        movw    r10, r24
+        ldi     r24, lo8(-1517)
+        ldi     r25, hi8(-1517)
+        movw    r12, r24
+
 layer1_2merge:
-    merging_2 r8, r9, r10, r11, r13, r12, 0, 128, 256, 384
-    cp ptrL, forstopL
-    cpc ptrH, forstopH
-    brne layer1_2merge
-    subi ptrL, 128
-    sbci ptrH, 0
-    subi forstopL, 96
-    sbci forstopH, 0
-    ldi r8, 0xD5
-    ldi r9, 0x05
-    ldi r10, 0x55
-    ldi r11, 0xFF
-    ldi r13, 0x6E
-    ldi r12, 0x02
+        merging_2   r8, r9, r10, r11, r12, r13, 0, 256, 512, 768
+        cp      r30, r20
+        cpc     r31, r21
+        brmi    layer1_2merge
+
+        ldi     r24, lo8(128)
+        ldi     r25, hi8(128)
+        sub     r30, r24
+        sbc     r31, r25
+
+        ldi     r24, lo8(96)
+        ldi     r25, hi8(96)
+        sub     r20, r24
+        sbc     r21, r25
+
+        ldi     r8, lo8(1493)
+        ldi     r9, hi8(1493)
+        ldi     r24, lo8(-171)
+        ldi     r25, hi8(-171)
+        movw    r10, r24
+        ldi     r24, lo8(622)
+        ldi     r25, hi8(622)
+        movw    r12, r24
+
 layer3_2merge_1:
-    merging_2 r8, r9, r10, r11, r13, r12, 0, 32, 64, 96
-    cp ptrL, forstopL
-    cpc ptrH, forstopH
-    brne layer3_2merge_1
-    adiw ptrL, 96
-    adiw forstopL, 128
-    ldi r8, 0x8E
-    ldi r9, 0x05
-    ldi r10, 0x29
-    ldi r11, 0x06
-    ldi r13, 0xB6
-    ldi r12, 0x00
+        merging_2   r8, r9, r10, r11, r12, r13, 0, 64, 128, 192
+        cp      r30, r20
+        cpc     r31, r21
+        brmi    layer3_2merge_1
+
+        ldi     r24, lo8(96)
+        ldi     r25, hi8(96)
+        add     r30, r24
+        adc     r31, r25
+
+        ldi     r24, lo8(128)
+        ldi     r25, hi8(128)
+        add     r20, r24
+        adc     r21, r25
+
+        ldi     r8, lo8(1422)
+        ldi     r9, hi8(1422)
+        ldi     r24, lo8(1577)
+        ldi     r25, hi8(1577)
+        movw    r10, r24
+        ldi     r24, lo8(182)
+        ldi     r25, hi8(182)
+        movw    r12, r24
+
 layer3_2merge_2:
-    merging_2 r8, r9, r10, r11, r13, r12, 0, 32, 64, 96
-    cp ptrL, forstopL
-    cpc ptrH, forstopH
-    brne layer3_2merge_2
-    adiw ptrL, 96
-    adiw forstopL, 128
-    ldi r8, 0x1F
-    ldi r9, 0x01
-    ldi r10, 0xC2
-    ldi r11, 0x03
-    ldi r13, 0x5E
-    ldi r12, 0xFB
+        merging_2   r8, r9, r10, r11, r12, r13, 0, 64, 128, 192
+        cp      r30, r20
+        cpc     r31, r21
+        brmi    layer3_2merge_2
+
+        ldi     r24, lo8(96)
+        ldi     r25, hi8(96)
+        add     r30, r24
+        adc     r31, r25
+
+        ldi     r24, lo8(128)
+        ldi     r25, hi8(128)
+        add     r20, r24
+        adc     r21, r25
+
+        ldi     r8, lo8(287)
+        ldi     r9, hi8(287)
+        ldi     r24, lo8(962)
+        ldi     r25, hi8(962)
+        movw    r10, r24
+        ldi     r24, lo8(-1202)
+        ldi     r25, hi8(-1202)
+        movw    r12, r24
+
 layer3_2merge_3:
-    merging_2 r8, r9, r10, r11, r13, r12, 0, 32, 64, 96
-    cp ptrL, forstopL
-    cpc ptrH, forstopH
-    brne layer3_2merge_3
-    adiw ptrL, 96
-    adiw forstopL, 128
-    ldi r8, 0xCA
-    ldi r9, 0x00
-    ldi r10, 0x3E
-    ldi r11, 0xFA
-    ldi r13, 0xBC
-    ldi r12, 0x05
+        merging_2   r8, r9, r10, r11, r12, r13, 0, 64, 128, 192
+        cp      r30, r20
+        cpc     r31, r21
+        brmi    layer3_2merge_3
+
+        ldi     r24, lo8(96)
+        ldi     r25, hi8(96)
+        add     r30, r24
+        adc     r31, r25
+
+        ldi     r24, lo8(128)
+        ldi     r25, hi8(128)
+        add     r20, r24
+        adc     r21, r25
+
+        ldi     r8, lo8(202)
+        ldi     r9, hi8(202)
+        ldi     r24, lo8(-1474)
+        ldi     r25, hi8(-1474)
+        movw    r10, r24
+        ldi     r24, lo8(1468)
+        ldi     r25, hi8(1468)
+        movw    r12, r24
+
 layer3_2merge_4:
-    merging_2 r8, r9, r10, r11, r13, r12, 0, 32, 64, 96
-    cp ptrL, forstopL
-    cpc ptrH, forstopH
-    brne layer3_2merge_4
-    subi ptrL, 0xA0
-    sbci ptrH, 0x01
+        merging_2   r8, r9, r10, r11, r12, r13, 0, 64, 128, 192
+        cp      r30, r20
+        cpc     r31, r21
+        brmi    layer3_2merge_4
+
+        ldi     r24, lo8(416)
+        ldi     r25, hi8(416)
+        sub     r30, r24
+        sbc     r31, r25
+
 layer5_3merge:
-    merging_3 0x3D,0x02, 0xC7,0x04, 0x8C,0x02, 0xB1,0xFB, 0xAE,0x01, 0x2B,0x02, 0xBB,0x03
-    merging_3 0x3D,0x02, 0xC7,0x04, 0x8C,0x02, 0xB1,0xFB, 0xAE,0x01, 0x2B,0x02, 0xBB,0x03
-    adiw Z, 28
-    merging_3 0xB3,0xFA, 0xD8,0xFD, 0xF7,0x03, 0xBD,0xFB, 0x67,0x03, 0xE6,0x06, 0x69,0x00
-    merging_3 0xB3,0xFA, 0xD8,0xFD, 0xF7,0x03, 0xBD,0xFB, 0x67,0x03, 0xE6,0x06, 0x69,0x00
-    adiw Z, 28
-    merging_3 0x08,0x01, 0xBB,0xFA, 0xCB,0x05, 0xA6,0x01, 0x4B,0x02, 0xB1,0x00, 0x15,0xFF
-    merging_3 0x08,0x01, 0xBB,0xFA, 0xCB,0x05, 0xA6,0x01, 0x4B,0x02, 0xB1,0x00, 0x15,0xFF
-    adiw Z, 28
-    merging_3 0x7F,0x01, 0xE6,0xFE, 0xF8,0xF9, 0xDD,0xFE, 0x24,0xFE, 0x2A,0x06, 0x75,0x06
-    merging_3 0x7F,0x01, 0xE6,0xFE, 0xF8,0xF9, 0xDD,0xFE, 0x24,0xFE, 0x2A,0x06, 0x75,0x06
-    adiw Z, 28
-    merging_3 0xCB,0xFC, 0x24,0x02, 0xF8,0xFF, 0x0A,0xFF, 0x0A,0x03, 0x87,0x04, 0x6D,0xFF
-    merging_3 0xCB,0xFC, 0x24,0x02, 0xF8,0xFF, 0x0A,0xFF, 0x0A,0x03, 0x87,0x04, 0x6D,0xFF
-    adiw Z, 28
-    merging_3 0x22,0x05, 0xC0,0xFE, 0x66,0xFD, 0xCF,0xFC, 0xCB,0x05, 0x56,0xFD, 0x5F,0x04
-    merging_3 0x22,0x05, 0xC0,0xFE, 0x66,0xFD, 0xCF,0xFC, 0xCB,0x05, 0x56,0xFD, 0x5F,0x04
-    adiw Z, 28
-    merging_3 0x9E,0xF9, 0x9E,0xF9, 0x76,0xFB, 0x82,0xF9, 0x84,0x02, 0xC8,0xFC, 0x5D,0x01
-    merging_3 0x9E,0xF9, 0x9E,0xF9, 0x76,0xFB, 0x82,0xF9, 0x84,0x02, 0xC8,0xFC, 0x5D,0x01
-    adiw Z, 28
-    merging_3 0x7E,0xFF, 0x7E,0x00, 0xBD,0x05, 0xA2,0x01, 0x49,0x01, 0x64,0xFF, 0xB5,0xFF
-    merging_3 0x7E,0xFF, 0x7E,0x00, 0xBD,0x05, 0xA2,0x01, 0x49,0x01, 0x64,0xFF, 0xB5,0xFF
-    adiw Z, 28
-    merging_3 0x57,0xFD, 0xAB,0xFC, 0xA6,0xFF, 0x31,0x03, 0x49,0x04, 0x5B,0x02, 0x62,0x02
-    merging_3 0x57,0xFD, 0xAB,0xFC, 0xA6,0xFF, 0x31,0x03, 0x49,0x04, 0x5B,0x02, 0x62,0x02
-    adiw Z, 28
-    merging_3 0xF9,0x03, 0xEF,0xFE, 0x3E,0x03, 0x2A,0x05, 0x7B,0xFA, 0x77,0xFA, 0x80,0x01
-    merging_3 0xF9,0x03, 0xEF,0xFE, 0x3E,0x03, 0x2A,0x05, 0x7B,0xFA, 0x77,0xFA, 0x80,0x01
-    adiw Z, 28
-    merging_3 0xDC,0x02, 0x6B,0x00, 0x73,0xFA, 0xB1,0xFB, 0x78,0xFF, 0x22,0x04, 0x79,0xFA
-    merging_3 0xDC,0x02, 0x6B,0x00, 0x73,0xFA, 0xB1,0xFB, 0x78,0xFF, 0x22,0x04, 0x79,0xFA
-    adiw Z, 28
-    merging_3 0x60,0x02, 0x09,0xFF, 0x31,0xFC, 0x76,0xFC, 0xDC,0x00, 0x65,0xFB, 0x95,0xF9
-    merging_3 0x60,0x02, 0x09,0xFF, 0x31,0xFC, 0x76,0xFC, 0xDC,0x00, 0x65,0xFB, 0x95,0xF9
-    adiw Z, 28
-    merging_3 0x86,0xF9, 0x72,0xFE, 0xC1,0x03, 0x5F,0xFB, 0x46,0xFA, 0x72,0xFB, 0x1A,0x03
-    merging_3 0x86,0xF9, 0x72,0xFE, 0xC1,0x03, 0x5F,0xFB, 0x46,0xFA, 0x72,0xFB, 0x1A,0x03
-    adiw Z, 28
-    merging_3 0x9B,0x01, 0x1C,0xFA, 0x33,0xFD, 0x0A,0xFA, 0xCA,0xFC, 0xC2,0xFC, 0xDE,0x01
-    merging_3 0x9B,0x01, 0x1C,0xFA, 0x33,0xFD, 0x0A,0xFA, 0xCA,0xFC, 0xC2,0xFC, 0xDE,0x01
-    adiw Z, 28
-    merging_3 0x33,0xFF, 0xC0,0x01, 0xF7,0xFB, 0x94,0xFF, 0x34,0xFE, 0xE4,0x03, 0xDF,0x03
-    merging_3 0x33,0xFF, 0xC0,0x01, 0xF7,0xFB, 0x94,0xFF, 0x34,0xFE, 0xE4,0x03, 0xDF,0x03
-    adiw Z, 28
-    merging_3 0x33,0xFC, 0xA5,0x02, 0x95,0xFB, 0xBE,0x03, 0xEC,0xFA, 0xF2,0x05, 0x5C,0x06
-    merging_3 0x33,0xFC, 0xA5,0x02, 0x95,0xFB, 0xBE,0x03, 0xEC,0xFA, 0xF2,0x05, 0x5C,0x06
-    pop r31
-    pop r30
-    pop r29
-    pop r28
-    pop r19
-    pop r18
-    pop r17
-    pop r16
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop r7
-    pop r6
-    pop r5
-    pop r4
-    pop r3
-    pop r2
-    ret
+        merging_3   lo8(573), hi8(573), lo8(1223), hi8(1223), lo8(652), hi8(652), lo8(-1103), hi8(-1103), lo8(430), hi8(430), lo8(555), hi8(555), lo8(843), hi8(843)
+        merging_3   lo8(573), hi8(573), lo8(1223), hi8(1223), lo8(652), hi8(652), lo8(-1103), hi8(-1103), lo8(430), hi8(430), lo8(555), hi8(555), lo8(843), hi8(843)
+        adiw    r30, 56
+
+        merging_3   lo8(-1325), hi8(-1325), lo8(-552), hi8(-552), lo8(1015), hi8(1015), lo8(-1251), hi8(-1251), lo8(871), hi8(871), lo8(1550), hi8(1550), lo8(105), hi8(105)
+        merging_3   lo8(-1325), hi8(-1325), lo8(-552), hi8(-552), lo8(1015), hi8(1015), lo8(-1251), hi8(-1251), lo8(871), hi8(871), lo8(1550), hi8(1550), lo8(105), hi8(105)
+        adiw    r30, 56
+
+        merging_3   lo8(264), hi8(264), lo8(-1293), hi8(-1293), lo8(1491), hi8(1491), lo8(422), hi8(422), lo8(587), hi8(587), lo8(177), hi8(177), lo8(-235), hi8(-235)
+        merging_3   lo8(264), hi8(264), lo8(-1293), hi8(-1293), lo8(1491), hi8(1491), lo8(422), hi8(422), lo8(587), hi8(587), lo8(177), hi8(177), lo8(-235), hi8(-235)
+        adiw    r30, 56
+
+        merging_3   lo8(383), hi8(383), lo8(-282), hi8(-282), lo8(-1544), hi8(-1544), lo8(-291), hi8(-291), lo8(-460), hi8(-460), lo8(1574), hi8(1574), lo8(1653), hi8(1653)
+        merging_3   lo8(383), hi8(383), lo8(-282), hi8(-282), lo8(-1544), hi8(-1544), lo8(-291), hi8(-291), lo8(-460), hi8(-460), lo8(1574), hi8(1574), lo8(1653), hi8(1653)
+        adiw    r30, 56
+
+        merging_3   lo8(-829), hi8(-829), lo8(516), hi8(516), lo8(-8), hi8(-8), lo8(-246), hi8(-246), lo8(778), hi8(778), lo8(1159), hi8(1159), lo8(-147), hi8(-147)
+        merging_3   lo8(-829), hi8(-829), lo8(516), hi8(516), lo8(-8), hi8(-8), lo8(-246), hi8(-246), lo8(778), hi8(778), lo8(1159), hi8(1159), lo8(-147), hi8(-147)
+        adiw    r30, 56
+
+        merging_3   lo8(1458), hi8(1458), lo8(-320), hi8(-320), lo8(-666), hi8(-666), lo8(-777), hi8(-777), lo8(1483), hi8(1483), lo8(-602), hi8(-602), lo8(1119), hi8(1119)
+        merging_3   lo8(1458), hi8(1458), lo8(-320), hi8(-320), lo8(-666), hi8(-666), lo8(-777), hi8(-777), lo8(1483), hi8(1483), lo8(-602), hi8(-602), lo8(1119), hi8(1119)
+        adiw    r30, 56
+
+        merging_3   lo8(-1602), hi8(-1602), lo8(-1618), hi8(-1618), lo8(-1162), hi8(-1162), lo8(-1590), hi8(-1590), lo8(644), hi8(644), lo8(-872), hi8(-872), lo8(349), hi8(349)
+        merging_3   lo8(-1602), hi8(-1602), lo8(-1618), hi8(-1618), lo8(-1162), hi8(-1162), lo8(-1590), hi8(-1590), lo8(644), hi8(644), lo8(-872), hi8(-872), lo8(349), hi8(349)
+        adiw    r30, 56
+
+        merging_3   lo8(-130), hi8(-130), lo8(126), hi8(126), lo8(1469), hi8(1469), lo8(418), hi8(418), lo8(329), hi8(329), lo8(-156), hi8(-156), lo8(-75), hi8(-75)
+        merging_3   lo8(-130), hi8(-130), lo8(126), hi8(126), lo8(1469), hi8(1469), lo8(418), hi8(418), lo8(329), hi8(329), lo8(-156), hi8(-156), lo8(-75), hi8(-75)
+        adiw    r30, 56
+
+        merging_3   lo8(-681), hi8(-681), lo8(-853), hi8(-853), lo8(-90), hi8(-90), lo8(817), hi8(817), lo8(1097), hi8(1097), lo8(603), hi8(603), lo8(610), hi8(610)
+        merging_3   lo8(-681), hi8(-681), lo8(-853), hi8(-853), lo8(-90), hi8(-90), lo8(817), hi8(817), lo8(1097), hi8(1097), lo8(603), hi8(603), lo8(610), hi8(610)
+        adiw    r30, 56
+
+        merging_3   lo8(1017), hi8(1017), lo8(-271), hi8(-271), lo8(830), hi8(830), lo8(1322), hi8(1322), lo8(-1285), hi8(-1285), lo8(-1465), hi8(-1465), lo8(384), hi8(384)
+        merging_3   lo8(1017), hi8(1017), lo8(-271), hi8(-271), lo8(830), hi8(830), lo8(1322), hi8(1322), lo8(-1285), hi8(-1285), lo8(-1465), hi8(-1465), lo8(384), hi8(384)
+        adiw    r30, 56
+
+        merging_3   lo8(732), hi8(732), lo8(107), hi8(107), lo8(-1421), hi8(-1421), lo8(-1215), hi8(-1215), lo8(-136), hi8(-136), lo8(1218), hi8(1218), lo8(-1335), hi8(-1335)
+        merging_3   lo8(732), hi8(732), lo8(107), hi8(107), lo8(-1421), hi8(-1421), lo8(-1215), hi8(-1215), lo8(-136), hi8(-136), lo8(1218), hi8(1218), lo8(-1335), hi8(-1335)
+        adiw    r30, 56
+
+        merging_3   lo8(608), hi8(608), lo8(-247), hi8(-247), lo8(-951), hi8(-951), lo8(-874), hi8(-874), lo8(220), hi8(220), lo8(-1187), hi8(-1187), lo8(-1659), hi8(-1659)
+        merging_3   lo8(608), hi8(608), lo8(-247), hi8(-247), lo8(-951), hi8(-951), lo8(-874), hi8(-874), lo8(220), hi8(220), lo8(-1187), hi8(-1187), lo8(-1659), hi8(-1659)
+        adiw    r30, 56
+
+        merging_3   lo8(-1542), hi8(-1542), lo8(-398), hi8(-398), lo8(961), hi8(961), lo8(-1185), hi8(-1185), lo8(-1530), hi8(-1530), lo8(-1278), hi8(-1278), lo8(794), hi8(794)
+        merging_3   lo8(-1542), hi8(-1542), lo8(-398), hi8(-398), lo8(961), hi8(961), lo8(-1185), hi8(-1185), lo8(-1530), hi8(-1530), lo8(-1278), hi8(-1278), lo8(794), hi8(794)
+        adiw    r30, 56
+
+        merging_3   lo8(411), hi8(411), lo8(-1508), hi8(-1508), lo8(-725), hi8(-725), lo8(-1510), hi8(-1510), lo8(-854), hi8(-854), lo8(-870), hi8(-870), lo8(478), hi8(478)
+        merging_3   lo8(411), hi8(411), lo8(-1508), hi8(-1508), lo8(-725), hi8(-725), lo8(-1510), hi8(-1510), lo8(-854), hi8(-854), lo8(-870), hi8(-870), lo8(478), hi8(478)
+        adiw    r30, 56
+
+        merging_3   lo8(-205), hi8(-205), lo8(448), hi8(448), lo8(-1065), hi8(-1065), lo8(-108), hi8(-108), lo8(-308), hi8(-308), lo8(996), hi8(996), lo8(991), hi8(991)
+        merging_3   lo8(-205), hi8(-205), lo8(448), hi8(448), lo8(-1065), hi8(-1065), lo8(-108), hi8(-108), lo8(-308), hi8(-308), lo8(996), hi8(996), lo8(991), hi8(991)
+        adiw    r30, 56
+
+        merging_3   lo8(-1571), hi8(-1571), lo8(677), hi8(677), lo8(-1275), hi8(-1275), lo8(958), hi8(958), lo8(-1460), hi8(-1460), lo8(1522), hi8(1522), lo8(1628), hi8(1628)
+        merging_3   lo8(-1571), hi8(-1571), lo8(677), hi8(677), lo8(-1275), hi8(-1275), lo8(958), hi8(958), lo8(-1460), hi8(-1460), lo8(1522), hi8(1522), lo8(1628), hi8(1628)
+
+        pop     r29
+        pop     r28
+        pop     r21
+        pop     r20
+        pop     r19
+        pop     r18
+        pop     r17
+        pop     r16
+        pop     r15
+        pop     r14
+        pop     r13
+        pop     r12
+        pop     r11
+        pop     r10
+        pop     r9
+        pop     r8
+        pop     r7
+        pop     r6
+        pop     r5
+        pop     r4
+
+        ret
