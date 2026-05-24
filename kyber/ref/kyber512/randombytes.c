@@ -1,11 +1,8 @@
 #include <stdint.h>
-#include <stddef.h>
-#include "randombytes.h"
+#include "fips202.h"
 
-int randombytes(void *buf, const size_t n)
+void randombytes(uint8_t *x, size_t len)
 {
-    uint8_t *p = (uint8_t *)buf;
-    for (size_t i = 0; i < n; i++)
-        p[i] = (uint8_t)i;
-    return 0;
+    static uint8_t seed[32] = {0}; // fixed seed for reproducibility
+    shake256(x, len, seed, 32);
 }
